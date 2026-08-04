@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Snippet:
     """A logical chunk of source code extracted from a file.
 
