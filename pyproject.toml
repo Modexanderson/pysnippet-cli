@@ -30,6 +30,7 @@ dependencies = [
     "click>=8.1",
     "sentence-transformers>=2.2",
     "numpy>=1.24",
+    "faiss-cpu>=1.7",
 ]
 
 [project.urls]

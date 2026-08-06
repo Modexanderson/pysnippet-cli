@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 
 from pysnippet_cli import __version__
+from pysnippet_cli.embedding import DEFAULT_MODEL_NAME
 
 
 @click.group()
@@ -23,10 +26,25 @@ def main() -> None:
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=str),
     default=".",
 )
-def index(directory: str) -> None:
+@click.option(
+    "--model", default=DEFAULT_MODEL_NAME, show_default=True, help="Embedding model to use."
+)
+def index(directory: str, model: str) -> None:
     """Index DIRECTORY, building a local searchable snippet store."""
-    click.echo(f"Indexing not yet implemented (target: {directory})")
-    raise SystemExit(1)
+    from pysnippet_cli.embedding import EmbeddingModel
+    from pysnippet_cli.indexer import build_index
+
+    click.echo(f"Indexing {directory} ...")
+    result = build_index(Path(directory), embedder=EmbeddingModel(model_name=model))
+
+    if result.snippets_indexed == 0:
+        click.echo(f"No indexable source files found under {directory}")
+        raise SystemExit(1)
+
+    click.echo(
+        f"Indexed {result.snippets_indexed} snippets from {result.files_scanned} files "
+        f"-> {result.db_path}"
+    )
 
 
 @main.command()
