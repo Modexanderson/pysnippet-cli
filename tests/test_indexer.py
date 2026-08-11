@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from pysnippet_cli.embedding import EmbeddingModel
-from pysnippet_cli.indexer import build_index, index_path_for
+from pysnippet_cli.indexer import build_index, find_project_index, index_path_for
 from pysnippet_cli.store import SnippetStore
 
 
@@ -33,6 +33,55 @@ class TestIndexPathFor:
     def test_default_location(self, tmp_path: Path) -> None:
         result = index_path_for(tmp_path)
         assert result == tmp_path / ".pysnippet" / "index.db"
+
+
+class TestFindProjectIndex:
+    def test_finds_index_in_start_directory(self, tmp_path: Path) -> None:
+        index_dir = tmp_path / ".pysnippet"
+        index_dir.mkdir()
+        (index_dir / "index.db").write_text("", encoding="utf-8")
+
+        result = find_project_index(tmp_path)
+        assert result == tmp_path / ".pysnippet" / "index.db"
+
+    def test_finds_index_in_parent_directory(self, tmp_path: Path) -> None:
+        index_dir = tmp_path / ".pysnippet"
+        index_dir.mkdir()
+        (index_dir / "index.db").write_text("", encoding="utf-8")
+
+        nested = tmp_path / "src" / "deeply" / "nested"
+        nested.mkdir(parents=True)
+
+        result = find_project_index(nested)
+        assert result == tmp_path / ".pysnippet" / "index.db"
+
+    def test_returns_none_when_not_found(self, tmp_path: Path) -> None:
+        # tmp_path itself has no .pysnippet, and its parents (real OS
+        # dirs) shouldn't have one either in a test environment.
+        result = find_project_index(tmp_path)
+        assert result is None
+
+    def test_defaults_to_cwd(self, tmp_path: Path, monkeypatch) -> None:
+        index_dir = tmp_path / ".pysnippet"
+        index_dir.mkdir()
+        (index_dir / "index.db").write_text("", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = find_project_index()
+        assert result == tmp_path / ".pysnippet" / "index.db"
+
+    def test_nearest_index_wins_over_ancestor(self, tmp_path: Path) -> None:
+        outer = tmp_path / ".pysnippet"
+        outer.mkdir()
+        (outer / "index.db").write_text("", encoding="utf-8")
+
+        inner_project = tmp_path / "sub"
+        inner_index = inner_project / ".pysnippet"
+        inner_index.mkdir(parents=True)
+        (inner_index / "index.db").write_text("", encoding="utf-8")
+
+        result = find_project_index(inner_project)
+        assert result == inner_project / ".pysnippet" / "index.db"
 
 
 class TestBuildIndex:

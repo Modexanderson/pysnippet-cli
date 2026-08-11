@@ -22,6 +22,19 @@ def index_path_for(directory: Path | str) -> Path:
     return Path(directory) / INDEX_DIR_NAME / INDEX_FILE_NAME
 
 
+def find_project_index(start: Path | str | None = None) -> Path | None:
+    """Walk upward from `start` (default: the current directory) looking
+    for a `.pysnippet/index.db`, the same way git locates `.git` from
+    any subdirectory of a repo. Returns None if none is found before
+    reaching the filesystem root."""
+    current = Path(start).resolve() if start is not None else Path.cwd()
+    for candidate in (current, *current.parents):
+        db_path = index_path_for(candidate)
+        if db_path.exists():
+            return db_path
+    return None
+
+
 @dataclass
 class IndexResult:
     files_scanned: int

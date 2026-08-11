@@ -91,26 +91,94 @@ class TestIndexCommand:
 
 
 class TestFindCommand:
-    def test_stub_exits_nonzero(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["find", "parse json"])
-        assert result.exit_code == 1
-        assert "parse json" in result.output
-
     def test_requires_query_argument(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["find"])
         assert result.exit_code != 0
 
-    def test_top_k_option(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["find", "test query", "--top-k", "10"])
-        assert "top_k: 10" in result.output
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_no_index_found(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        monkeypatch.chdir(tmp_path)
 
-    def test_top_k_default(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["find", "test query"])
-        assert "top_k: 5" in result.output
+        result = runner.invoke(main, ["find", "some query"])
+
+        assert result.exit_code == 1
+        assert "No index found" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_empty_index(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "some query"])
+        assert result.exit_code == 1
+        assert "Index is empty" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_returns_results(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        index_result = runner.invoke(main, ["index", str(tmp_path)])
+        assert index_result.exit_code == 0
+
+        result = runner.invoke(main, ["find", "foo function"])
+        assert result.exit_code == 0
+        assert "foo" in result.output
+        assert "a.py" in result.output
+        assert "id=" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_top_k_limits_results(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        for i in range(5):
+            (tmp_path / f"f{i}.py").write_text(
+                f"def func{i}():\n    return {i}\n", encoding="utf-8"
+            )
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "function", "--top-k", "2"])
+        assert result.exit_code == 0
+        assert result.output.count("id=") == 2
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_finds_index_from_subdirectory(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        nested = tmp_path / "sub" / "dir"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+
+        result = runner.invoke(main, ["find", "foo"])
+        assert result.exit_code == 0
+        assert "id=" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_uses_model_stored_in_index_meta(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path), "--model", "custom-model"])
+        mock_load.reset_mock()
+
+        runner.invoke(main, ["find", "foo"])
+        mock_load.assert_called_once_with("custom-model")
 
 
 class TestShowCommand:
