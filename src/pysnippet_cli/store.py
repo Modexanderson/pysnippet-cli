@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS files (
+    file_path TEXT PRIMARY KEY,
+    mtime REAL NOT NULL,
+    content_hash TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_snippets_file_path ON snippets(file_path);
 """
 
@@ -120,7 +126,33 @@ class SnippetStore:
     def clear(self) -> None:
         self._conn.execute("DELETE FROM snippets")
         self._conn.execute("DELETE FROM meta")
+        self._conn.execute("DELETE FROM files")
         self._conn.commit()
+
+    def get_file_record(self, file_path: str) -> tuple[float, str] | None:
+        """Return (mtime, content_hash) last recorded for `file_path`,
+        or None if it hasn't been indexed."""
+        row = self._conn.execute(
+            "SELECT mtime, content_hash FROM files WHERE file_path = ?", (file_path,)
+        ).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def set_file_record(self, file_path: str, mtime: float, content_hash: str) -> None:
+        self._conn.execute(
+            "INSERT INTO files (file_path, mtime, content_hash) VALUES (?, ?, ?) "
+            "ON CONFLICT(file_path) DO UPDATE SET "
+            "mtime = excluded.mtime, content_hash = excluded.content_hash",
+            (file_path, mtime, content_hash),
+        )
+        self._conn.commit()
+
+    def delete_file_record(self, file_path: str) -> None:
+        self._conn.execute("DELETE FROM files WHERE file_path = ?", (file_path,))
+        self._conn.commit()
+
+    def all_file_paths(self) -> set[str]:
+        rows = self._conn.execute("SELECT file_path FROM files").fetchall()
+        return {row[0] for row in rows}
 
     def all_embeddings(self) -> tuple[list[str], np.ndarray]:
         """Return (ids, embeddings) for every stored snippet, in a

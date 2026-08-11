@@ -128,8 +128,29 @@ def show(snippet_id: str) -> None:
 @main.command()
 def update() -> None:
     """Incrementally re-index files that changed since the last index."""
-    click.echo("Update not yet implemented")
-    raise SystemExit(1)
+    from pysnippet_cli.indexer import find_project_index, update_index
+    from pysnippet_cli.store import SnippetStore
+
+    db_path = find_project_index()
+    if db_path is None:
+        click.echo("No index found. Run `pysnippet index <directory>` first.")
+        raise SystemExit(1)
+
+    with SnippetStore(db_path) as store:
+        source_directory = store.get_meta("source_directory")
+
+    if source_directory is None:
+        click.echo("Index is missing its source directory. Re-run `pysnippet index`.")
+        raise SystemExit(1)
+
+    click.echo(f"Updating index for {source_directory} ...")
+    result = update_index(source_directory, db_path=db_path)
+
+    click.echo(
+        f"Added {result.files_added}, changed {result.files_changed}, "
+        f"removed {result.files_removed}, unchanged {result.files_unchanged} "
+        f"({result.snippets_indexed} snippets re-embedded) -> {result.db_path}"
+    )
 
 
 if __name__ == "__main__":

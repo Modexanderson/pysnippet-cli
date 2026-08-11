@@ -1,10 +1,17 @@
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from pysnippet_cli.embedding import EmbeddingModel
-from pysnippet_cli.indexer import build_index, find_project_index, index_path_for
+from pysnippet_cli.indexer import (
+    build_index,
+    find_project_index,
+    index_path_for,
+    update_index,
+)
 from pysnippet_cli.store import SnippetStore
 
 
@@ -207,3 +214,165 @@ class TestBuildIndex:
         _write(tmp_path / "a.py", "def foo():\n    pass\n")
         result = build_index(str(tmp_path), embedder=_fake_embedder())
         assert result.files_scanned == 1
+
+
+def _touch(path: Path, mtime: float) -> None:
+    os.utime(path, (mtime, mtime))
+
+
+class TestUpdateIndex:
+    def test_raises_without_existing_index(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            update_index(tmp_path, embedder=_fake_embedder())
+
+    def test_unchanged_files_are_skipped(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert result.files_unchanged == 1
+        assert result.files_added == 0
+        assert result.files_changed == 0
+        assert result.snippets_indexed == 0
+
+    def test_detects_new_file(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        _write(tmp_path / "b.py", "def bar():\n    pass\n")
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert result.files_added == 1
+        assert result.files_unchanged == 1
+
+        with SnippetStore(build_result.db_path) as store:
+            names = {s.name for s in store.all_snippets()}
+            assert names == {"foo", "bar"}
+
+    def test_detects_changed_content(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.py"
+        _write(file_path, "def foo():\n    return 1\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        original_mtime = file_path.stat().st_mtime
+        _write(file_path, "def foo():\n    return 2\n")
+        _touch(file_path, original_mtime + 100)  # ensure mtime differs
+
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert result.files_changed == 1
+        assert result.files_added == 0
+
+        with SnippetStore(build_result.db_path) as store:
+            snippets = [s for s in store.all_snippets() if s.name == "foo"]
+            assert len(snippets) == 1
+            assert "return 2" in snippets[0].content
+
+    def test_detects_removed_file(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        _write(tmp_path / "b.py", "def bar():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        (tmp_path / "b.py").unlink()
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert result.files_removed == 1
+
+        with SnippetStore(build_result.db_path) as store:
+            names = {s.name for s in store.all_snippets()}
+            assert names == {"foo"}
+            assert store.all_file_paths() == {"a.py"}
+
+    def test_touch_without_content_change_is_unchanged(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.py"
+        _write(file_path, "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        original_mtime = file_path.stat().st_mtime
+        _touch(file_path, original_mtime + 100)  # mtime changes, content doesn't
+
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert result.files_changed == 0
+        assert result.files_unchanged == 1
+        assert result.snippets_indexed == 0
+
+    def test_touch_refreshes_stored_mtime(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.py"
+        _write(file_path, "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        new_mtime = file_path.stat().st_mtime + 100
+        _touch(file_path, new_mtime)
+        update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        with SnippetStore(build_result.db_path) as store:
+            stored_mtime, _ = store.get_file_record("a.py")
+            assert stored_mtime == pytest.approx(new_mtime)
+
+    def test_unchanged_mtime_skips_reading_file(self, tmp_path: Path, monkeypatch) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        read_calls = []
+        import pysnippet_cli.indexer as indexer_module
+
+        original_read_text = indexer_module.read_text
+
+        def _spy_read_text(path):
+            read_calls.append(path)
+            return original_read_text(path)
+
+        monkeypatch.setattr(indexer_module, "read_text", _spy_read_text)
+
+        update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        assert read_calls == []
+
+    def test_snippets_indexed_counts_only_changed_and_added(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        _write(tmp_path / "b.py", "def bar():\n    pass\n\n\ndef baz():\n    pass\n")
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        # Only b.py's snippets should be counted -- a.py was unchanged
+        assert result.snippets_indexed >= 2
+
+        with SnippetStore(build_result.db_path) as store:
+            assert store.count() >= 3  # foo + bar + baz
+
+    def test_uses_model_name_from_existing_index_when_no_embedder_given(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        fake_model = MagicMock()
+        fake_model.get_embedding_dimension.return_value = 4
+        fake_model.encode.side_effect = lambda texts, **kw: np.random.rand(
+            len(texts), 4
+        ).astype(np.float32)
+
+        load_calls = []
+
+        def _fake_load_model(model_name):
+            load_calls.append(model_name)
+            return fake_model
+
+        monkeypatch.setattr("pysnippet_cli.embedding._load_model", _fake_load_model)
+
+        _write(tmp_path / "b.py", "def bar():\n    pass\n")
+        update_index(tmp_path, db_path=build_result.db_path)
+
+        assert load_calls == ["fake-model"]
+
+    def test_string_directory_argument(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        result = update_index(
+            str(tmp_path), embedder=_fake_embedder(), db_path=build_result.db_path
+        )
+        assert result.files_unchanged == 1

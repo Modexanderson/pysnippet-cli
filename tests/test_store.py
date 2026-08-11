@@ -213,3 +213,47 @@ class TestAllSnippets:
     def test_empty_store_returns_empty_list(self, tmp_path: Path) -> None:
         with SnippetStore(tmp_path / "index.db") as store:
             assert store.all_snippets() == []
+
+
+class TestFileRecords:
+    def test_round_trip(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.set_file_record("a.py", 123.456, "abc123")
+            record = store.get_file_record("a.py")
+            assert record == (123.456, "abc123")
+
+    def test_missing_record_returns_none(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            assert store.get_file_record("nonexistent.py") is None
+
+    def test_overwrite_existing_record(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.set_file_record("a.py", 100.0, "hash1")
+            store.set_file_record("a.py", 200.0, "hash2")
+            assert store.get_file_record("a.py") == (200.0, "hash2")
+
+    def test_delete_file_record(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.set_file_record("a.py", 100.0, "hash1")
+            store.delete_file_record("a.py")
+            assert store.get_file_record("a.py") is None
+
+    def test_delete_nonexistent_record_is_noop(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.delete_file_record("nonexistent.py")  # should not raise
+
+    def test_all_file_paths(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.set_file_record("a.py", 1.0, "h1")
+            store.set_file_record("b.py", 2.0, "h2")
+            assert store.all_file_paths() == {"a.py", "b.py"}
+
+    def test_all_file_paths_empty(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            assert store.all_file_paths() == set()
+
+    def test_clear_removes_file_records(self, tmp_path: Path) -> None:
+        with SnippetStore(tmp_path / "index.db") as store:
+            store.set_file_record("a.py", 1.0, "h1")
+            store.clear()
+            assert store.all_file_paths() == set()

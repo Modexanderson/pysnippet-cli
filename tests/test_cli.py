@@ -234,7 +234,72 @@ class TestShowCommand:
 
 
 class TestUpdateCommand:
-    def test_stub_exits_nonzero(self) -> None:
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_no_index_found(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        monkeypatch.chdir(tmp_path)
+
         runner = CliRunner()
         result = runner.invoke(main, ["update"])
+
         assert result.exit_code == 1
+        assert "No index found" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_updates_with_new_file(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        (tmp_path / "b.py").write_text("def bar():\n    pass\n", encoding="utf-8")
+        result = runner.invoke(main, ["update"])
+
+        assert result.exit_code == 0
+        assert "Added 1" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_no_changes_reports_unchanged(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
+        assert "unchanged 1" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_removed_file_is_reflected(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text("def bar():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        (tmp_path / "b.py").unlink()
+        result = runner.invoke(main, ["update"])
+
+        assert result.exit_code == 0
+        assert "removed 1" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_works_from_subdirectory(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        nested = tmp_path / "sub" / "dir"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
