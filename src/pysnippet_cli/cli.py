@@ -107,8 +107,22 @@ def _preview(content: str, *, max_lines: int = 3, max_chars: int = 200) -> str:
 @click.argument("snippet_id")
 def show(snippet_id: str) -> None:
     """Display the full snippet identified by SNIPPET_ID."""
-    click.echo(f"Show not yet implemented (id: {snippet_id})")
-    raise SystemExit(1)
+    from pysnippet_cli.display import render_snippet
+    from pysnippet_cli.indexer import find_project_index
+    from pysnippet_cli.store import SnippetStore
+
+    db_path = find_project_index()
+    if db_path is None:
+        click.echo("No index found. Run `pysnippet index <directory>` first.")
+        raise SystemExit(1)
+
+    with SnippetStore(db_path) as store:
+        snippet = store.get_snippet(snippet_id)
+        if snippet is None:
+            click.echo(f"No snippet found with id {snippet_id!r}")
+            raise SystemExit(1)
+
+        render_snippet(snippet)
 
 
 @main.command()

@@ -182,16 +182,55 @@ class TestFindCommand:
 
 
 class TestShowCommand:
-    def test_stub_exits_nonzero(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["show", "abc123"])
-        assert result.exit_code == 1
-        assert "abc123" in result.output
-
     def test_requires_id_argument(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["show"])
         assert result.exit_code != 0
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_no_index_found(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["show", "abc123"])
+
+        assert result.exit_code == 1
+        assert "No index found" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_snippet_not_found(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["show", "does-not-exist"])
+        assert result.exit_code == 1
+        assert "No snippet found" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_shows_snippet_content(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    return 42\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        from pysnippet_cli.indexer import find_project_index
+        from pysnippet_cli.store import SnippetStore
+
+        db_path = find_project_index(tmp_path)
+        with SnippetStore(db_path) as store:
+            snippet = next(s for s in store.all_snippets() if s.name == "foo")
+
+        result = runner.invoke(main, ["show", snippet.id])
+        assert result.exit_code == 0
+        assert "return 42" in result.output
+        assert "foo" in result.output
 
 
 class TestUpdateCommand:
