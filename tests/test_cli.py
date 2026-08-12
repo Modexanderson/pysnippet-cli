@@ -90,6 +90,124 @@ class TestIndexCommand:
         mock_load.assert_called_once_with("custom-model")
 
 
+class TestConfigIntegration:
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_index_uses_model_from_config(self, mock_load, tmp_path) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / ".pysnippetrc").write_text('model = "config-model"\n', encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["index", str(tmp_path)])
+
+        assert result.exit_code == 0
+        mock_load.assert_called_once_with("config-model")
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_explicit_model_option_overrides_config(self, mock_load, tmp_path) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / ".pysnippetrc").write_text('model = "config-model"\n', encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["index", str(tmp_path), "--model", "cli-model"])
+
+        assert result.exit_code == 0
+        mock_load.assert_called_once_with("cli-model")
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_index_respects_ignore_patterns_from_config(self, mock_load, tmp_path) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "real.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / "skip.generated.py").write_text("def bar():\n    pass\n", encoding="utf-8")
+        (tmp_path / ".pysnippetrc").write_text(
+            'ignore = ["*.generated.py"]\n', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        from pysnippet_cli.indexer import find_project_index
+        from pysnippet_cli.store import SnippetStore
+
+        db_path = find_project_index(tmp_path)
+        with SnippetStore(db_path) as store:
+            names = {s.name for s in store.all_snippets()}
+            assert names == {"foo"}
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_index_respects_language_filter_from_config(self, mock_load, tmp_path) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / "b.js").write_text("function bar() {\n  return 1;\n}\n", encoding="utf-8")
+        (tmp_path / ".pysnippetrc").write_text('languages = ["python"]\n', encoding="utf-8")
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        from pysnippet_cli.indexer import find_project_index
+        from pysnippet_cli.store import SnippetStore
+
+        db_path = find_project_index(tmp_path)
+        with SnippetStore(db_path) as store:
+            languages = {s.language for s in store.all_snippets()}
+            assert languages == {"python"}
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_find_uses_top_k_from_config(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        for i in range(5):
+            (tmp_path / f"f{i}.py").write_text(
+                f"def func{i}():\n    return {i}\n", encoding="utf-8"
+            )
+        (tmp_path / ".pysnippetrc").write_text("top_k = 2\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "function"])
+        assert result.exit_code == 0
+        assert result.output.count("id=") == 2
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_explicit_top_k_overrides_config(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        for i in range(5):
+            (tmp_path / f"f{i}.py").write_text(
+                f"def func{i}():\n    return {i}\n", encoding="utf-8"
+            )
+        (tmp_path / ".pysnippetrc").write_text("top_k = 2\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "function", "--top-k", "4"])
+        assert result.exit_code == 0
+        assert result.output.count("id=") == 4
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_update_respects_ignore_patterns_from_config(
+        self, mock_load, tmp_path, monkeypatch
+    ) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "real.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        (tmp_path / ".pysnippetrc").write_text(
+            'ignore = ["*.generated.py"]\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        (tmp_path / "skip.generated.py").write_text("def bar():\n    pass\n", encoding="utf-8")
+        result = runner.invoke(main, ["update"])
+
+        assert result.exit_code == 0
+        assert "Added 0" in result.output
+
+
 class TestFindCommand:
     def test_requires_query_argument(self) -> None:
         runner = CliRunner()

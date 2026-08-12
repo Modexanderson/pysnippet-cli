@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from pysnippet_cli.walker import language_for, walk_files
+from pysnippet_cli.walker import extensions_for_languages, language_for, walk_files
 
 
 def _touch(path: Path, content: str = "x = 1\n") -> None:
@@ -94,6 +94,64 @@ class TestWalkFiles:
         assert found == {"a.py", "b.ts", "c.dart", "d.go", "e.rs"}
 
 
+class TestIgnorePatterns:
+    def test_glob_pattern_excludes_matching_filenames(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "real.py")
+        _touch(tmp_path / "models.generated.py")
+
+        found = {p.name for p in walk_files(tmp_path, ignore_patterns=["*.generated.py"])}
+        assert found == {"real.py"}
+
+    def test_glob_pattern_matches_relative_path(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "src" / "real.py")
+        _touch(tmp_path / "tests" / "fixtures" / "sample.py")
+
+        found = {
+            p.name
+            for p in walk_files(tmp_path, ignore_patterns=["tests/fixtures/*"])
+        }
+        assert found == {"real.py"}
+
+    def test_directory_pattern_prunes_whole_directory(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "real.py")
+        _touch(tmp_path / "legacy" / "old.py")
+        _touch(tmp_path / "legacy" / "nested" / "deep.py")
+
+        found = {p.name for p in walk_files(tmp_path, ignore_patterns=["legacy/"])}
+        assert found == {"real.py"}
+
+    def test_multiple_patterns_combine(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "real.py")
+        _touch(tmp_path / "vendor" / "lib.py")
+        _touch(tmp_path / "a.generated.py")
+
+        found = {
+            p.name
+            for p in walk_files(
+                tmp_path, ignore_patterns=["vendor/", "*.generated.py"]
+            )
+        }
+        assert found == {"real.py"}
+
+    def test_no_patterns_matches_everything(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "a.py")
+        _touch(tmp_path / "b.py")
+
+        found = {p.name for p in walk_files(tmp_path, ignore_patterns=[])}
+        assert found == {"a.py", "b.py"}
+
+    def test_default_ignore_dirs_still_apply_alongside_patterns(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "real.py")
+        _touch(tmp_path / "node_modules" / "pkg.js")
+        _touch(tmp_path / "legacy" / "old.py")
+
+        found = {
+            p.name
+            for p in walk_files(tmp_path, ignore_patterns=["legacy/"])
+        }
+        assert found == {"real.py"}
+
+
 class TestLanguageFor:
     def test_known_extension(self) -> None:
         assert language_for(Path("foo.py")) == "python"
@@ -105,3 +163,35 @@ class TestLanguageFor:
 
     def test_custom_extension_map(self) -> None:
         assert language_for(Path("foo.custom"), {".custom": "custom-lang"}) == "custom-lang"
+
+
+class TestExtensionsForLanguages:
+    def test_none_means_no_restriction(self) -> None:
+        assert extensions_for_languages(None) is None
+
+    def test_single_language(self) -> None:
+        result = extensions_for_languages(["python"])
+        assert set(result.values()) == {"python"}
+        assert ".py" in result
+        assert ".pyi" in result
+        assert ".js" not in result
+
+    def test_multiple_languages(self) -> None:
+        result = extensions_for_languages(["python", "dart"])
+        assert set(result.values()) == {"python", "dart"}
+
+    def test_unknown_language_yields_empty_map(self) -> None:
+        result = extensions_for_languages(["cobol"])
+        assert result == {}
+
+    def test_empty_list_yields_empty_map(self) -> None:
+        result = extensions_for_languages([])
+        assert result == {}
+
+    def test_result_usable_with_walk_files(self, tmp_path: Path) -> None:
+        _touch(tmp_path / "a.py")
+        _touch(tmp_path / "b.js")
+
+        exts = extensions_for_languages(["python"])
+        found = {p.name for p in walk_files(tmp_path, extensions=exts)}
+        assert found == {"a.py"}

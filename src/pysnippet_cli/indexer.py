@@ -16,7 +16,7 @@ from pysnippet_cli.parsers import parse
 from pysnippet_cli.snippet import Snippet
 from pysnippet_cli.splitter import read_text
 from pysnippet_cli.store import SnippetStore
-from pysnippet_cli.walker import language_for, walk_files
+from pysnippet_cli.walker import extensions_for_languages, language_for, walk_files
 
 INDEX_DIR_NAME = ".pysnippet"
 INDEX_FILE_NAME = "index.db"
@@ -82,9 +82,15 @@ def build_index(
     embedder: EmbeddingModel | None = None,
     db_path: Path | str | None = None,
     batch_size: int = 32,
+    ignore_patterns: list[str] | None = None,
+    languages: list[str] | None = None,
 ) -> IndexResult:
     """Walk `directory`, extract snippets from every source file, embed
     them, and store the result in a local SQLite index.
+
+    `ignore_patterns` and `languages` narrow what gets walked -- see
+    `walker.walk_files` and `walker.extensions_for_languages` (normally
+    sourced from a `.pysnippetrc` via `config.load_config`).
 
     Overwrites any existing index at the target path -- this is a full
     rebuild. Records each file's mtime/content hash so a later
@@ -93,11 +99,12 @@ def build_index(
     directory = Path(directory).resolve()
     embedder = embedder or EmbeddingModel()
     resolved_db_path = Path(db_path) if db_path is not None else index_path_for(directory)
+    extensions = extensions_for_languages(languages)
 
     all_snippets: list[Snippet] = []
     scanned_files: list[_ScannedFile] = []
 
-    for file_path in walk_files(directory):
+    for file_path in walk_files(directory, extensions=extensions, ignore_patterns=ignore_patterns):
         scanned = _scan_file(file_path, directory)
         if scanned is None:
             continue
@@ -139,10 +146,14 @@ def update_index(
     embedder: EmbeddingModel | None = None,
     db_path: Path | str | None = None,
     batch_size: int = 32,
+    ignore_patterns: list[str] | None = None,
+    languages: list[str] | None = None,
 ) -> UpdateResult:
     """Incrementally re-index `directory`: only files that are new or
     whose content changed since the last index/update are re-embedded.
-    Files removed from disk have their snippets removed too.
+    Files removed from disk -- or newly excluded by `ignore_patterns`/
+    `languages` -- have their snippets removed too, since they simply
+    won't be "seen" during the walk.
 
     Uses a two-tier check per file: if its mtime matches what's stored,
     it's assumed unchanged and never even read (the fast path -- this
@@ -164,6 +175,8 @@ def update_index(
             f"No index found at {resolved_db_path}. Run `pysnippet index` first."
         )
 
+    extensions = extensions_for_languages(languages)
+
     with SnippetStore(resolved_db_path) as store:
         stored_model_name = store.get_meta("model_name")
         if embedder is None:
@@ -181,7 +194,8 @@ def update_index(
         files_changed = 0
         files_unchanged = 0
 
-        for file_path in walk_files(directory):
+        walked = walk_files(directory, extensions=extensions, ignore_patterns=ignore_patterns)
+        for file_path in walked:
             language = language_for(file_path)
             if language is None:
                 continue

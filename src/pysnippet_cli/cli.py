@@ -28,15 +28,28 @@ def main() -> None:
     default=".",
 )
 @click.option(
-    "--model", default=DEFAULT_MODEL_NAME, show_default=True, help="Embedding model to use."
+    "--model", default=None, help=f"Embedding model to use. [default: {DEFAULT_MODEL_NAME}]"
 )
-def index(directory: str, model: str) -> None:
-    """Index DIRECTORY, building a local searchable snippet store."""
+def index(directory: str, model: str | None) -> None:
+    """Index DIRECTORY, building a local searchable snippet store.
+
+    Settings not passed as options fall back to a `.pysnippetrc` found
+    by searching DIRECTORY and its parents, then to built-in defaults.
+    """
+    from pysnippet_cli.config import load_config
     from pysnippet_cli.embedding import EmbeddingModel
     from pysnippet_cli.indexer import build_index
 
+    config = load_config(directory)
+    resolved_model = model or config.model or DEFAULT_MODEL_NAME
+
     click.echo(f"Indexing {directory} ...")
-    result = build_index(Path(directory), embedder=EmbeddingModel(model_name=model))
+    result = build_index(
+        Path(directory),
+        embedder=EmbeddingModel(model_name=resolved_model),
+        ignore_patterns=config.ignore or None,
+        languages=config.languages,
+    )
 
     if result.snippets_indexed == 0:
         click.echo(f"No indexable source files found under {directory}")
@@ -50,9 +63,12 @@ def index(directory: str, model: str) -> None:
 
 @main.command()
 @click.argument("query")
-@click.option("-k", "--top-k", default=5, show_default=True, help="Number of results to return.")
-def find(query: str, top_k: int) -> None:
+@click.option(
+    "-k", "--top-k", default=None, type=int, help="Number of results to return. [default: 5]"
+)
+def find(query: str, top_k: int | None) -> None:
     """Search the index for snippets matching QUERY."""
+    from pysnippet_cli.config import load_config
     from pysnippet_cli.embedding import EmbeddingModel
     from pysnippet_cli.indexer import find_project_index
     from pysnippet_cli.search_index import SearchIndex
@@ -62,6 +78,8 @@ def find(query: str, top_k: int) -> None:
     if db_path is None:
         click.echo("No index found. Run `pysnippet index <directory>` first.")
         raise SystemExit(1)
+
+    resolved_top_k = top_k if top_k is not None else load_config().top_k
 
     with SnippetStore(db_path) as store:
         if store.count() == 0:
@@ -75,7 +93,7 @@ def find(query: str, top_k: int) -> None:
         search_idx = SearchIndex(ids, vectors)
 
         query_vector = embedder.embed_texts([query])[0]
-        results = search_idx.search(query_vector, top_k=top_k)
+        results = search_idx.search(query_vector, top_k=resolved_top_k)
 
         if not results:
             click.echo("No matches found.")
@@ -128,6 +146,7 @@ def show(snippet_id: str) -> None:
 @main.command()
 def update() -> None:
     """Incrementally re-index files that changed since the last index."""
+    from pysnippet_cli.config import load_config
     from pysnippet_cli.indexer import find_project_index, update_index
     from pysnippet_cli.store import SnippetStore
 
@@ -143,8 +162,15 @@ def update() -> None:
         click.echo("Index is missing its source directory. Re-run `pysnippet index`.")
         raise SystemExit(1)
 
+    config = load_config(source_directory)
+
     click.echo(f"Updating index for {source_directory} ...")
-    result = update_index(source_directory, db_path=db_path)
+    result = update_index(
+        source_directory,
+        db_path=db_path,
+        ignore_patterns=config.ignore or None,
+        languages=config.languages,
+    )
 
     click.echo(
         f"Added {result.files_added}, changed {result.files_changed}, "
