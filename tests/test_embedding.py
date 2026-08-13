@@ -97,6 +97,19 @@ class TestEmbeddingModel:
         assert embedder.dimension == 384
 
     @patch("pysnippet_cli.embedding._load_model")
+    def test_dimension_raises_when_model_reports_none(self, mock_load) -> None:
+        model = MagicMock()
+        model.get_embedding_dimension.return_value = None
+        mock_load.return_value = model
+        embedder = EmbeddingModel()
+
+        try:
+            _ = embedder.dimension
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            assert embedder.model_name in str(e)
+
+    @patch("pysnippet_cli.embedding._load_model")
     def test_embed_snippets_uses_formatted_text(self, mock_load) -> None:
         mock_model = _mock_model()
         mock_load.return_value = mock_model

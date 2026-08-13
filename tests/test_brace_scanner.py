@@ -75,3 +75,23 @@ class TestFindMatchingBrace:
         text = "{ 'unterminated\n} "
         close = find_matching_brace(text, 0)
         assert close == text.index("}")
+
+    def test_handles_escaped_char_inside_triple_quoted_string(self) -> None:
+        text = r"{ '''a\'b''' }"
+        assert find_matching_brace(text, 0) == len(text) - 1
+
+    def test_unterminated_triple_quoted_string_returns_none(self) -> None:
+        text = "{ '''unterminated"
+        assert find_matching_brace(text, 0) is None
+
+    def test_unterminated_string_with_no_newline_returns_none(self) -> None:
+        # A single-quoted string that runs to the end of the text
+        # without a newline or closing quote (distinct from the
+        # newline-bail case above -- this exercises the final `return i`
+        # fallback at the end of the scan loop).
+        text = "{ 'unterminated"
+        assert find_matching_brace(text, 0) is None
+
+    def test_unterminated_block_comment_returns_none(self) -> None:
+        text = "{ /* unterminated"
+        assert find_matching_brace(text, 0) is None

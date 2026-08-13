@@ -215,6 +215,19 @@ class TestBuildIndex:
         result = build_index(str(tmp_path), embedder=_fake_embedder())
         assert result.files_scanned == 1
 
+    def test_binary_file_with_valid_extension_is_skipped(self, tmp_path: Path) -> None:
+        # walk_files only filters by extension, not content -- a binary
+        # file masquerading as a .py file should be silently skipped
+        # (read_text returns None) rather than crashing the index.
+        _write(tmp_path / "real.py", "def foo():\n    pass\n")
+        (tmp_path / "binary.py").write_bytes(b"\x00\x01\x02binary\xff")
+
+        result = build_index(tmp_path, embedder=_fake_embedder())
+
+        assert result.files_scanned == 1
+        with SnippetStore(result.db_path) as store:
+            assert all(s.file_path != "binary.py" for s in store.all_snippets())
+
 
 def _touch(path: Path, mtime: float) -> None:
     os.utime(path, (mtime, mtime))
@@ -376,3 +389,22 @@ class TestUpdateIndex:
             str(tmp_path), embedder=_fake_embedder(), db_path=build_result.db_path
         )
         assert result.files_unchanged == 1
+
+    def test_file_turned_binary_is_skipped(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.py"
+        _write(file_path, "def foo():\n    pass\n")
+        build_result = build_index(tmp_path, embedder=_fake_embedder())
+
+        original_mtime = file_path.stat().st_mtime
+        file_path.write_bytes(b"\x00\x01\x02binary\xff")
+        _touch(file_path, original_mtime + 100)
+
+        result = update_index(tmp_path, embedder=_fake_embedder(), db_path=build_result.db_path)
+
+        # Not counted as changed (it was never re-embedded), and the
+        # old snippet for a.py is still in the store untouched since we
+        # never got far enough to delete/replace it.
+        assert result.files_changed == 0
+        assert result.files_added == 0
+        with SnippetStore(build_result.db_path) as store:
+            assert any(s.name == "foo" for s in store.all_snippets())

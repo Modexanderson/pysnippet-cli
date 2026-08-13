@@ -195,3 +195,62 @@ class TestExtensionsForLanguages:
         exts = extensions_for_languages(["python"])
         found = {p.name for p in walk_files(tmp_path, extensions=exts)}
         assert found == {"a.py"}
+
+
+class TestWalkFilesErrorHandling:
+    def test_permission_error_on_iterdir_skips_directory(self, tmp_path: Path, monkeypatch) -> None:
+        _touch(tmp_path / "good.py")
+        blocked = tmp_path / "blocked"
+        blocked.mkdir()
+        _touch(blocked / "hidden.py")
+
+        original_iterdir = Path.iterdir
+
+        def _fake_iterdir(self):
+            if self.name == "blocked":
+                raise PermissionError("simulated")
+            return original_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", _fake_iterdir)
+
+        found = {p.name for p in walk_files(tmp_path)}
+        assert found == {"good.py"}
+
+    def test_symlinks_are_skipped(self, tmp_path: Path, monkeypatch) -> None:
+        _touch(tmp_path / "real.py")
+        _touch(tmp_path / "link.py")
+
+        original_is_symlink = Path.is_symlink
+
+        def _fake_is_symlink(self):
+            if self.name == "link.py":
+                return True
+            return original_is_symlink(self)
+
+        monkeypatch.setattr(Path, "is_symlink", _fake_is_symlink)
+
+        found = {p.name for p in walk_files(tmp_path)}
+        assert found == {"real.py"}
+
+    def test_oserror_on_stat_skips_file(self, tmp_path: Path, monkeypatch) -> None:
+        _touch(tmp_path / "good.py")
+        _touch(tmp_path / "bad.py")
+
+        # is_dir()/is_file() each call stat() once too (with no args,
+        # same as the size-check call), so a name-only check can't tell
+        # those apart from the size check we actually want to fail --
+        # only raise once those two prior calls have already happened.
+        original_stat = Path.stat
+        call_counts: dict[str, int] = {}
+
+        def _fake_stat(self, *args, **kwargs):
+            if self.name == "bad.py" and not args and not kwargs:
+                call_counts["bad.py"] = call_counts.get("bad.py", 0) + 1
+                if call_counts["bad.py"] > 2:
+                    raise OSError("simulated")
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", _fake_stat)
+
+        found = {p.name for p in walk_files(tmp_path)}
+        assert found == {"good.py"}

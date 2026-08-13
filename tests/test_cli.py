@@ -298,6 +298,35 @@ class TestFindCommand:
         runner.invoke(main, ["find", "foo"])
         mock_load.assert_called_once_with("custom-model")
 
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_zero_top_k_reports_no_matches(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "foo", "--top-k", "0"])
+        assert result.exit_code == 0
+        assert "No matches found" in result.output
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_long_content_preview_is_truncated(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        long_line = "x = " + "1" * 300
+        (tmp_path / "a.py").write_text(f"def foo():\n    {long_line}\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        result = runner.invoke(main, ["find", "foo"])
+        assert result.exit_code == 0
+        assert "..." in result.output
+        # The full 300-char line shouldn't appear verbatim -- it was cut off.
+        assert long_line not in result.output
+
 
 class TestShowCommand:
     def test_requires_id_argument(self) -> None:
@@ -421,3 +450,24 @@ class TestUpdateCommand:
 
         result = runner.invoke(main, ["update"])
         assert result.exit_code == 0
+
+    @patch("pysnippet_cli.embedding._load_model")
+    def test_missing_source_directory_in_meta(self, mock_load, tmp_path, monkeypatch) -> None:
+        mock_load.return_value = _fake_model()
+        (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        runner.invoke(main, ["index", str(tmp_path)])
+
+        from pysnippet_cli.indexer import find_project_index
+        from pysnippet_cli.store import SnippetStore
+
+        db_path = find_project_index(tmp_path)
+        with SnippetStore(db_path) as store:
+            store._conn.execute("DELETE FROM meta WHERE key = 'source_directory'")
+            store._conn.commit()
+
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 1
+        assert "missing its source directory" in result.output

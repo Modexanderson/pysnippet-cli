@@ -1,4 +1,9 @@
-from pysnippet_cli.parsers.regex_parser import parse_brace_language, supports
+from pysnippet_cli.parsers.regex_parser import (
+    _JS_METHOD_RE,
+    _extract_methods,
+    parse_brace_language,
+    supports,
+)
 
 
 class TestSupports:
@@ -224,4 +229,46 @@ class TestLeftoverAndOrdering:
 
     def test_empty_content(self) -> None:
         result = parse_brace_language("", file_path="a.js", language="javascript")
+        assert result == []
+
+
+class TestDefensiveEdgeCases:
+    def test_anonymous_default_export_function_is_skipped(self) -> None:
+        # JS_FUNCTION_RE's name group is optional -- an anonymous
+        # function has no name to index it by, so it's left as leftover
+        # content rather than becoming a nameless "function" snippet.
+        content = "export default function() {\n  return 1;\n}\n"
+        snippets = parse_brace_language(content, file_path="a.js", language="javascript")
+        assert snippets is not None
+        assert all(s.kind != "function" for s in snippets)
+
+    def test_unclosed_top_level_declaration_is_skipped(self) -> None:
+        # A function whose brace never closes anywhere in the file --
+        # find_matching_brace returns None, so it's never extracted.
+        content = "function foo() {\n  return 1;\n"
+        snippets = parse_brace_language(content, file_path="a.js", language="javascript")
+        assert snippets is not None
+        assert all(s.kind != "function" for s in snippets)
+
+    def test_control_keyword_inside_class_body_is_not_a_method(self) -> None:
+        # The loose method pattern doesn't require a keyword, so it can
+        # match control-flow-shaped text like "if (x) {" -- the control
+        # keyword filter catches this rather than emitting a bogus
+        # "Foo.if" method.
+        content = "class Foo {\n  if (x) {\n    return 1;\n  }\n}\n"
+        snippets = parse_brace_language(content, file_path="a.js", language="javascript")
+        assert snippets is not None
+        assert all(s.name != "Foo.if" for s in snippets)
+
+    def test_extract_methods_skips_unclosed_method_brace(self) -> None:
+        content = "  bar() {\n    return 1;\n"
+        result = _extract_methods(
+            content,
+            0,
+            len(content),
+            _JS_METHOD_RE,
+            file_path="a.js",
+            language="javascript",
+            class_name="Foo",
+        )
         assert result == []
