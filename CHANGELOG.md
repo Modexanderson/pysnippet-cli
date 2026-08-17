@@ -1,6 +1,6 @@
-## Unreleased
+## 1.0.0
 
-Initial feature-complete implementation.
+Initial release.
 
 - **CLI**: `pysnippet index`, `find`, `show`, `update` (`click`-based)
 - **File walker**: recursive scan with sensible default ignores

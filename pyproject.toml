@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pysnippet-cli"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local GPU-accelerated code snippet search using embeddings — find code by meaning, not just text."
 readme = "README.md"
 license = "MIT"
@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
